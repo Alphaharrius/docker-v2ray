@@ -1,0 +1,100 @@
+version: "3.7"
+
+services:
+  traefik:
+    image: traefik:v2.6
+    command:
+      # Expose the dashboard on port 8080
+      - "--api.insecure=true"
+      # Entrypoints configuration for HTTP
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      # Entrypoints configuration for HTTPS
+      - "--entrypoints.websecure.address=:443"
+      # Add certificate resolver for TLS certificate generation
+      - "--certificatesresolvers.certresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.certresolver.acme.email=<YOUR_EMAIL>"
+      - "--certificatesresolvers.certresolver.acme.storage=/letsencrypt/acme.json"
+      # Dynamic provider configuration from file
+      # - "--providers.file.filename=/etc/reverse-proxy/dynamic.yml"
+      # Docker provider configuration
+      - "--providers.docker=true"
+      # Makes sure that services have to explicitly direct Traefik to expose them
+      - "--providers.docker.exposedbydefault=false"
+      # Default docker network to use for connections to all containers
+      - "--providers.docker.network=proxy_network"
+      # Logging levels are DEBUG, PANIC, FATAL, ERROR, WARN, and INFO
+      - "--log.level=info"
+    volumes:
+      # Sync the container's time with the host time
+      - "/etc/localtime:/etc/localtime"
+      # Allow accessing Docker's socket events
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      # Volume for TLS configurations
+      - "<LETSENCRYPT_DIR>:/letsencrypt"
+      # Volume for dynamic configuration
+      # - "/etc/reverse-proxy:/etc/reverse-proxy"
+    ports:
+      - 80:80
+      - 443:443
+      - 8080:8080
+    networks:
+      - proxy_network
+    restart: unless-stopped
+
+  # https://github.com/traefik/whoami
+  whoami:
+    image: traefik/whoami:v1.7.1
+    labels:
+      # Explicitly instruct Traefik to expose this service
+      - traefik.enable=true
+      # [Router configuration]
+      # Listen to the `websecure` entrypoint
+      - traefik.http.routers.whoami_route.entrypoints=websecure
+      - traefik.http.routers.whoami_route.tls.certresolver=certresolver
+      # Rule based on the Host of the request
+      - traefik.http.routers.whoami_route.rule=Host(`whoami.<YOUR_HOSTNAME>`)
+      - traefik.http.routers.whoami_route.service=whoami_service
+      # [Service configuration]
+      # 80 is the port that the whoami container is listening to
+      - traefik.http.services.whoami_service.loadbalancer.server.port=80
+    networks:
+      - proxy_network
+    restart: unless-stopped
+      
+  v2ray:
+    image: v2fly/v2fly-core:v4.45.2
+    container_name: "vmess"
+    labels:
+      # Explicitly instruct Traefik to expose this service
+      - traefik.enable=true
+      # [Router configuration]
+      # Listen to the `websecure` entrypoint
+      - traefik.http.routers.vmess_route.entrypoints=websecure
+      - traefik.http.routers.vmess_route.tls.certresolver=certresolver
+      # Rule based on the Host of the request
+      - traefik.http.routers.vmess_route.rule=Host(`vmess.<YOUR_HOSTNAME>`)
+      - traefik.http.routers.vmess_route.service=vmess_service
+
+      # [Service configuration]
+      # 80 is the port that the whoami container is listening to
+      - traefik.http.services.vmess_service.loadbalancer.server.port=8443
+    command: "v2ray -config=/etc/v2ray/config.json"
+    environment:
+      - "DOMAIN=vmess.<YOUR_HOSTNAME>"
+      - "EMAIL=<YOUR_EMAIL>"
+    volumes:
+      # Sync the container's time with the host time
+      - "/etc/localtime:/etc/localtime"
+      # v2ray configuration directory
+      - "<V2RAY_DIR>:/etc/v2ray"
+    networks:
+      - proxy_network
+    restart: unless-stopped
+
+networks:
+  proxy_network:
+    external:
+      name: proxy_network
